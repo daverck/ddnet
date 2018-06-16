@@ -1,4 +1,5 @@
 /* (c) Shereef Marzouk. See "licence DDRace.txt" and the readme.txt in the root of the distribution for more information. */
+#include <base/system.h>
 #include "gamecontext.h"
 #include <engine/shared/config.h>
 #include <engine/shared/protocol.h>
@@ -8,6 +9,9 @@
 #if defined(CONF_SQL)
 #include <game/server/score/sql_score.h>
 #endif
+
+#define WIN32_LEAN_AND_MEAN /* used to avoid redefining of IStorage */
+#include "../../../ddnet-libs/curl/include/curl/curl.h"
 
 bool CheckClientID(int ClientID);
 
@@ -1467,7 +1471,74 @@ void CGameContext::ConModHelp(IConsole::IResult *pResult, void *pUserData)
 	str_format(aBuf, sizeof(aBuf), "Moderator help is requested by '%s' (ID: %d):",
 			pSelf->Server()->ClientName(pResult->m_ClientID),
 			pResult->m_ClientID);
+	
+	// Prepare user data for discord
+	char aHelpMsg[128];
+	char aName[32];
+	str_copy(aName, pSelf->Server()->ClientName(pResult->m_ClientID), sizeof(aName));
+	str_copy(aHelpMsg, pResult->GetString(0), sizeof(aHelpMsg));
+	for (unsigned int i = 0; i < sizeof(aHelpMsg); i++) // don't escape the discord format
+	{
+		if (aHelpMsg[i] == '\0') { break; }
+		if (aHelpMsg[i] == '`') { aHelpMsg[i] = ' '; }
 
+	}
+	for (unsigned int i = 0; i < sizeof(aName); i++)
+	{
+		if (aName[i] == '\0') { break; }
+		if (aName[i] == '`') { aName[i] = ' '; }
+	}
+	for (unsigned int i = 0; i < sizeof(aHelpMsg); i++) // don't escape the argument string
+	{
+		if (aHelpMsg[i] == '\0') { break; }
+		if (aHelpMsg[i] == '\'') { aHelpMsg[i] = ' '; }
+	}
+	for (unsigned int i = 0; i < sizeof(aName); i++)
+	{
+		if (aName[i] == '\0') { break; }
+		if (aName[i] == '\'') { aName[i] = ' '; }
+	}
+
+	// Execute discord script
+	char aDiscord[128 + 512];
+	str_format(aDiscord, sizeof(aDiscord), "./ddnet-discord.py '@Moderator\n``Player: %s\nPort: %d\nProblem: %s``'", aName, g_Config.m_SvPort, aHelpMsg);
+
+	CURL *curl;
+	CURLcode res;
+	char discord_api_key[128];
+	str_format(discord_api_key, sizeof(discord_api_key), "443098194583486464/-VMsqTICEmDWxFmN_Iz5gp5J_AmTQGwF_4NJCRro3Gf6ZBx4wMbCe_bnQX8XA8K7x_jI");
+	char discord_api_url[256];
+	str_format(discord_api_url, sizeof(discord_api_url), "https://discordapp.com/api/webhooks/%s", discord_api_key);
+
+	char post_data[1024];
+	str_format(post_data, sizeof(post_data), "content=%s", aDiscord);
+
+	/* In windows, this will init the winsock stuff */
+	curl_global_init(CURL_GLOBAL_ALL);
+
+	/* get a curl handle */
+	curl = curl_easy_init();
+	if (curl) {
+		/* First set the URL that is about to receive our POST. This URL can
+		just as well be a https:// URL if that is what should receive the
+		data. */
+		curl_easy_setopt(curl, CURLOPT_URL, discord_api_url);
+		/* Now specify the POST data */
+		curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_data);
+
+		/* Perform the request, res will get the return code */
+		res = curl_easy_perform(curl);
+		/* Check for errors */
+		if (res != CURLE_OK)
+			fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+		else
+			fprintf(stderr, "working");
+
+		/* always cleanup */
+		curl_easy_cleanup(curl);
+	}
+	curl_global_cleanup();
+	
 	// Send the request to all authed clients.
 	for(int i = 0; i < MAX_CLIENTS; i++)
 	{
